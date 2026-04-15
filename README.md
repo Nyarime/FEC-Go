@@ -1,23 +1,16 @@
 # GoFEC
 
-Pure Go FEC (Forward Error Correction) erasure code library. No CGO. AVX2 SIMD accelerated.
+[![Go Reference](https://pkg.go.dev/badge/github.com/nyarime/gofec.svg)](https://pkg.go.dev/github.com/nyarime/gofec)
 
-[English](#english)
+纯Go前向纠错 (FEC) 纠删码库，SIMD硬件加速，无CGO依赖。
 
-## 特性
+GoFEC提供两种自研纠删码实现——**RaptorQ喷泉码**和**LDPC低密度校验码**，配合AVX2/NEON汇编加速的GF(256)有限域运算，在纯Go生态中实现接近C/C++的性能。
 
-| 编码 | 包名 | 状态 | 性能 |
-|------|------|------|------|
-| RaptorQ | `raptorq` | ✅ | 43μs/32KB encode |
-| LDPC | `ldpc` | ✅ | 18μs encode, 20μs decode |
-| GF(256) | `internal/gf256` | ✅ | 11.5 GB/s (AVX2 VPSHUFB) |
-| XOR | `internal/xor` | ✅ | 31.6 GB/s (AVX2) |
+项目主页: https://github.com/Nyarime/GoFEC
 
-**为什么选GoFEC？**
-- **纯Go** — 无CGO、无SWIG、无外部C/C++依赖
-- **跨平台** — Windows / Linux / macOS / Android / iOS
-- **SIMD加速** — AVX2 + SSE2 (amd64)，通用uint64 fallback (其他平台)
-- **统一接口** — 所有编码实现统一Codec接口，可插拔切换
+Godoc: https://pkg.go.dev/github.com/nyarime/gofec
+
+[English](README_EN.md)
 
 ## 安装
 
@@ -25,9 +18,36 @@ Pure Go FEC (Forward Error Correction) erasure code library. No CGO. AVX2 SIMD a
 go get github.com/nyarime/gofec
 ```
 
-## 快速开始
+推荐使用Go Modules。
 
-### RaptorQ (喷泉码)
+## 特性
+
+| 编码 | 描述 | 状态 |
+|------|------|------|
+| RaptorQ | RFC 6330 喷泉码，无限修复符号 | ✅ |
+| LDPC | PEG矩阵 + BP迭代解码 | ✅ |
+| GF(256) | Log/Exp查表 + SIMD向量化 | ✅ |
+| XOR加速 | AVX2/NEON硬件加速 | ✅ |
+
+### SIMD加速栈
+
+GoFEC在运行时自动检测CPU特性，选择最优指令集：
+
+| 平台 | XOR | GF(256) MulAdd |
+|------|-----|----------------|
+| amd64 AVX512+GFNI | 32B/op | 64B/op (VGF2P8AFFINEQB) |
+| amd64 AVX2 | 32B/op (VPXOR) | 32B/op (VPSHUFB) |
+| amd64 SSE2 | 16B/op | 标量 |
+| arm64 NEON | 16B/op (VEOR) | 16B/op (VTBL) |
+| 通用 | 8B/op (uint64) | 标量 Log/Exp |
+
+## 使用
+
+### RaptorQ喷泉码
+
+RaptorQ是一种无速率(rateless)纠删码——可以从源数据生成**无限个**修复符号。接收端只要收到**略多于源符号数量**的任意符号组合，就能恢复原始数据。
+
+这种特性在丢包率不可预知的场景(如移动网络、卫星链路)中非常有用。
 
 ```go
 import "github.com/nyarime/gofec/raptorq"
@@ -35,82 +55,123 @@ import "github.com/nyarime/gofec/raptorq"
 // 创建编解码器: 16个源符号, 每个128字节
 codec := raptorq.New(16, 128)
 
-// 编码: 源数据 + 8个修复符号
+// 编码: 源数据 → 源符号 + 8个修复符号
 symbols := codec.Encode(data, 8)
 
-// 丢失部分符号后解码
+// 模拟网络传输: 丢失部分符号...
+// 只要收到≥16个符号(任意组合), 就能恢复
+
+// 解码
 decoded, err := codec.Decode(receivedSymbols, len(data))
+if err != nil {
+    log.Fatal("修复符号不足:", err)
+}
 ```
 
-### LDPC
+**关键参数选择:**
+- `K` (源符号数): 越大编码效率越高，但延迟也越高。推荐8~64。
+- `T` (符号大小): 通常与网络MTU相关。推荐64~1024字节。
+- 修复符号数: 越多容错越强。建议至少`K * 0.5`。
+
+### LDPC低密度校验码
+
+LDPC是一种固定码率的分组码，编解码速度极快，适合已知丢包率的低延迟场景。
 
 ```go
 import "github.com/nyarime/gofec/ldpc"
 
-// 创建编解码器: 10数据块 + 4校验块, PEG矩阵密度0.3
+// 创建编解码器: 10个数据块, 4个校验块, PEG矩阵密度0.3
 codec := ldpc.New(10, 4, 0.3)
 
-// 编码
+// 编码: 数据块 → 数据块 + 校验块
 encoded := codec.Encode(dataShards)
 
 // 丢失部分块后恢复
 err := codec.Decode(partialShards)
 ```
 
+### RaptorQ vs LDPC: 如何选择？
+
+| 场景 | 推荐 | 理由 |
+|------|------|------|
+| 丢包率未知 | RaptorQ | 喷泉码天生适应任意丢包率 |
+| 实时视频/游戏 | LDPC | BP解码延迟极低 |
+| 文件传输/分发 | RaptorQ | 不用提前知道丢多少包 |
+| 卫星/高丢包链路 | RaptorQ | 多发修复符号即可 |
+| 低丢包+低延迟 | LDPC | 固定少量冗余，解码快 |
+
+**一句话总结:** LDPC更快更省(已知丢包)，RaptorQ更灵活更鲁棒(未知丢包)。
+
 ## 性能
+
+测试环境: Intel Broadwell, Go 1.25, Linux amd64
 
 ### RaptorQ编码
 
-| 数据大小 | 延迟 | 吞吐 |
-|----------|------|------|
-| 512B | 2.6μs | 197 MB/s |
-| 2KB | 6.1μs | 328 MB/s |
-| 8KB | 15μs | 533 MB/s |
-| 32KB | 43μs | 744 MB/s |
+| 数据大小 | 延迟 | 吞吐 | 内存分配 |
+|----------|------|------|----------|
+| 512B | 2.4μs | 213 MB/s | 14 allocs |
+| 2KB | 5.0μs | 400 MB/s | 27 allocs |
+| 8KB | 13.5μs | 593 MB/s | 53 allocs |
+| 32KB | 41μs | 780 MB/s | 103 allocs |
 
-### 丢失恢复
+### RaptorQ丢失恢复
 
-| 丢失块数 | 16源+N*3修复 | 状态 |
+| 丢失块数 | 8源+N*3修复 | 状态 |
 |----------|-------------|------|
-| 1 | ✅ | 恢复成功 |
-| 2 | ✅ | 恢复成功 |
-| 3 | ✅ | 恢复成功 |
-| 4 | ✅ | 恢复成功 |
-| 5 | ✅ | 恢复成功 |
-| 6 | ✅ | 恢复成功 |
+| 1~6 | ✅ | 全部恢复成功 |
 
-### SIMD加速
+### LDPC编解码
 
-| 操作 | 标量 | AVX2 | 提升 |
-|------|------|------|------|
-| XOR | 1 GB/s | 31.6 GB/s | 31x |
-| GF(256) MulAdd | 773 MB/s | 11.5 GB/s | 15x |
+| 操作 | 延迟 |
+|------|------|
+| 编码 | 18μs/op |
+| 解码 | 20μs/op |
+
+### SIMD加速基准
+
+| 操作 | 吞吐 | 零分配 |
+|------|------|--------|
+| XOR (AVX2, 4KB) | 31.6 GB/s | ✅ |
+| GF(256) MulAdd (AVX2, 1KB) | 15.0 GB/s | ✅ |
+| GF(256) Mul (标量) | 607M ops/s | ✅ |
 
 ## 架构
 
 ```
 GoFEC/
-├── codec.go              # 统一Codec接口
-├── raptorq/              # RaptorQ喷泉码 (RFC 6330核心)
-│   ├── raptorq.go        # 编解码器
-│   └── xor.go            # AVX2 XOR
-├── ldpc/                 # LDPC低密度校验码
-│   ├── ldpc.go           # 编解码器
-│   ├── peg.go            # PEG矩阵构造
-│   └── xor.go            # AVX2 XOR
+├── codec.go                  # 统一Codec接口
+├── raptorq/                  # RaptorQ喷泉码 (RFC 6330)
+│   ├── raptorq.go            # 编解码器 (LT编码+高斯消元)
+│   └── xor.go                # SIMD XOR桥接
+├── ldpc/                     # LDPC低密度校验码
+│   ├── ldpc.go               # BP迭代解码
+│   ├── peg.go                # PEG矩阵构造
+│   └── xor.go                # SIMD XOR桥接
 └── internal/
-    ├── xor/              # AVX2/SSE2 XOR加速
-    │   ├── xor_amd64.s   # 汇编
-    │   └── xor_generic.go
-    └── gf256/            # GF(256)有限域
-        ├── gf.go         # Log/Exp查表
-        ├── mulAdd_amd64.s # AVX2 VPSHUFB
-        └── muladd_generic.go
+    ├── xor/                  # 硬件加速XOR
+    │   ├── xor_amd64.s       # AVX2汇编
+    │   ├── xor_arm64.s       # NEON汇编
+    │   └── xor_generic.go    # 通用fallback
+    └── gf256/                # GF(2^8)有限域
+        ├── gf.go             # Log/Exp查表
+        ├── tables.go         # 预计算Split Tables (8KB)
+        ├── mulAdd_amd64.s    # AVX2 VPSHUFB
+        ├── mulAdd_gfni_amd64.s  # AVX512 GFNI
+        ├── mulAdd_arm64.s    # NEON VTBL
+        ├── cpu_amd64.go      # CPU特性检测
+        └── cpu_arm64.go      # CPU特性检测
 ```
+
+## 路线图
+
+- [x] v1.0 — RaptorQ + LDPC + AVX2 + NEON
+- [ ] v1.x — AVX512 GFNI运行时加速 (3倍GF提速)
+- [ ] v2.0 — GF(2^16) + Leopard-RS (65536分片)
 
 ## 被引用
 
-- [NRUP](https://github.com/Nyarime/NRUP) — 高性能UDP传输协议的FEC层
+- [NRUP](https://github.com/Nyarime/NRUP) — Nyarime Reliable UDP Protocol
 
 ## 致谢
 
@@ -120,39 +181,3 @@ GoFEC/
 ## 许可证
 
 Apache License 2.0
-
----
-
-<a name="english"></a>
-## English
-
-Pure Go FEC (Forward Error Correction) erasure code library with AVX2 SIMD acceleration. No CGO required.
-
-**Features:**
-- RaptorQ fountain code (RFC 6330 core) — 43μs/32KB
-- LDPC with PEG matrix — 18μs encode
-- AVX2 VPSHUFB GF(256) — 11.5 GB/s
-- AVX2 XOR — 31.6 GB/s
-- Zero CGO, cross-platform
-
-**GoFEC aims to be for erasure codes what klauspost/reedsolomon is for Reed-Solomon — the fastest pure Go implementation available.**
-
-We believe in contributing back to the Go ecosystem. This library is our effort to provide high-performance FEC primitives that were previously only available in C/C++.
-
-## Acknowledgments
-
-- [klauspost/reedsolomon](https://github.com/klauspost/reedsolomon) — The gold standard Reed-Solomon implementation in Go. GoFEC's AVX2 SIMD acceleration and GF(256) VPSHUFB lookup table design are deeply inspired by this exceptional library. Thank you Klaus Post for your outstanding contributions to the Go ecosystem.
-- [google/gofountain](https://github.com/google/gofountain) — Pure Go fountain code reference implementation.
-
-## RaptorQ vs LDPC 选择指南
-
-| 场景 | 推荐 | 理由 |
-|------|------|------|
-| 实时视频/游戏 | LDPC | BP解码快, 固定冗余 |
-| 文件传输/分发 | RaptorQ | 丢包率未知也能恢复 |
-| 卫星/高丢包链路 | RaptorQ | 喷泉码天生抗丢包 |
-| 5G/物理层 | LDPC | 硬件友好, 标准采用 |
-| 未知带宽传输 | RaptorQ | 随时多发修复符号 |
-
-**LDPC** = 更快、更省 (已知丢包)
-**RaptorQ** = 更灵活、更鲁棒 (未知丢包)
