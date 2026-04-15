@@ -4,7 +4,7 @@
 
 纯Go前向纠错 (FEC) 纠删码库，SIMD硬件加速，无CGO依赖。
 
-GoFEC提供两种自研纠删码实现——**RaptorQ喷泉码**和**LDPC低密度校验码**，配合AVX2/NEON汇编加速的GF(256)有限域运算，在纯Go生态中实现接近C/C++的性能。
+GoFEC提供两种纠删码实现——**RaptorQ喷泉码**和**LDPC低密度校验码**，配合AVX2/NEON汇编加速的GF(256)有限域运算。
 
 项目主页: https://github.com/Nyarime/GoFEC
 
