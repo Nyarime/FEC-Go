@@ -1,3 +1,3 @@
-module github.com/nyarime/raptorq-go
+module github.com/nyarime/gofec
 
 go 1.23.8
