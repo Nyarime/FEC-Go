@@ -10,6 +10,7 @@
 package raptorq
 
 import (
+	"github.com/nyarime/gofec/internal/gf256"
 	"encoding/binary"
 	"errors"
 	"math"
@@ -336,7 +337,8 @@ func hdpcCoeff(row, col, H int) byte {
 }
 
 // gfMulAdd GF(256)乘加: dst += src * coeff
-func gfMulAdd(dst, src []byte, coeff byte) {
+func gfMulAdd(dst, src []byte, coeff byte) { gf256.MulAdd(dst, src, coeff); return }
+func gfMulAddOld(dst, src []byte, coeff byte) {
 	if coeff == 0 { return }
 	if coeff == 1 { xorSymbol(dst, src); return }
 	for i := range dst {
@@ -347,7 +349,8 @@ func gfMulAdd(dst, src []byte, coeff byte) {
 }
 
 // gfMul GF(256)乘法(简化版,用log/antilog表更快)
-func gfMul(a, b byte) byte {
+func gfMul(a, b byte) byte { return gf256.Mul(a, b) }
+func gfMulOld(a, b byte) byte {
 	if a == 0 || b == 0 { return 0 }
 	// 简化: 直接模乘
 	return byte((uint16(a) * uint16(b)) % 255)
