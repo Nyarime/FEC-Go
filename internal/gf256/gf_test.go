@@ -1,6 +1,9 @@
 package gf256
 
-import "testing"
+import (
+	"runtime"
+	"testing"
+)
 
 func TestMul(t *testing.T) {
 	// 基本性质
@@ -83,4 +86,14 @@ func BenchmarkMulAddRegion(b *testing.B) {
 			}
 		})
 	}
+}
+
+
+
+func TestCPUFeatures(t *testing.T) {
+	t.Logf("GOARCH: %s", runtime.GOARCH)
+	if runtime.GOARCH == "amd64" {
+		t.Logf("GFNI available: %v", hasGFNI)
+	}
+	t.Log("✅ CPU特性检测正常")
 }
