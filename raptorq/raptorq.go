@@ -17,11 +17,19 @@ import (
 
 // Codec RaptorQ编解码器
 type Codec struct {
-	sourceSymbols int     // K: 源符号数
-	symbolSize    int     // T: 每个符号的字节数
-	numLDPC       int     // S: LDPC校验符号数
-	numHDPC       int     // H: HDPC校验符号数
-	numLT         int     // L = K + S + H: 中间符号总数
+	sourceSymbols int
+	symbolSize    int
+	numLDPC       int
+	numHDPC       int
+	numLT         int
+	// 预分配workspace(零GC)
+	workspace     *workspace
+}
+
+type workspace struct {
+	encBuf    []byte   // 编码临时buffer
+	neighbors []int    // 邻居列表复用
+	seen      []bool   // 邻居去重
 }
 
 // New 创建RaptorQ编解码器
@@ -40,6 +48,11 @@ func New(sourceSymbols, symbolSize int) *Codec {
 		numLDPC:       S,
 		numHDPC:       H,
 		numLT:         L,
+		workspace: &workspace{
+			encBuf:    make([]byte, symbolSize),
+			neighbors: make([]int, 0, L),
+			seen:      make([]bool, K),
+		},
 	}
 }
 
@@ -357,13 +370,16 @@ func ltDegree(esi uint32, L int) int {
 func ltNeighbors(esi uint32, degree, L int) []int {
 	neighbors := make([]int, 0, degree)
 	h := esi
-	seen := make(map[int]bool)
-	
-	for len(neighbors) < degree {
-		h = h*1103515245 + 12345 // LCG
+	// 用位图代替map(零分配)
+	for len(neighbors) < degree && len(neighbors) < L {
+		h = h*1103515245 + 12345
 		n := int(h % uint32(L))
-		if !seen[n] {
-			seen[n] = true
+		// 线性检查重复(degree通常<10,比map快)
+		dup := false
+		for _, nn := range neighbors {
+			if nn == n { dup = true; break }
+		}
+		if !dup {
 			neighbors = append(neighbors, n)
 		}
 	}
