@@ -17,13 +17,11 @@ func MulAddRegion(dst, src []byte, coeff byte) {
 	if len(src) < n { n = len(src) }
 
 	if coeff == 1 {
-		// 纯XOR, 走xor包更快
 		for i := 0; i < n; i++ { dst[i] ^= src[i] }
 		return
 	}
 
 	if hasGFNI {
-		// AVX512 GFNI: 64字节/次, 单指令GF乘法
 		aligned := n &^ 63
 		if aligned > 0 {
 			mulAddGFNI(dst[:aligned], src[:aligned], gfniMatrix[coeff])
@@ -34,12 +32,54 @@ func MulAddRegion(dst, src []byte, coeff byte) {
 		return
 	}
 
-	// AVX2 VPSHUFB: 32字节/次
-	aligned := n &^ 31
-	if aligned > 0 {
-		mulAddAVX2(dst[:aligned], src[:aligned], &mulLo[coeff], &mulHi[coeff])
+	if hasAVX2 {
+		aligned := n &^ 31
+		if aligned > 0 {
+			mulAddAVX2(dst[:aligned], src[:aligned], &mulLo[coeff], &mulHi[coeff])
+		}
+		for i := aligned; i < n; i++ {
+			dst[i] ^= Mul(src[i], coeff)
+		}
+		return
 	}
-	for i := aligned; i < n; i++ {
+
+	// SSE4.1 / scalar fallback
+	for i := 0; i < n; i++ {
 		dst[i] ^= Mul(src[i], coeff)
 	}
 }
+
+// MulRegion dst = src * coeff (overwrite, not XOR)
+func MulRegion(dst, src []byte, coeff byte) {
+	n := len(dst)
+	if len(src) < n { n = len(src) }
+
+	if coeff == 0 {
+		for i := 0; i < n; i++ { dst[i] = 0 }
+		return
+	}
+	if coeff == 1 {
+		copy(dst[:n], src[:n])
+		return
+	}
+
+	// GFNI: copy src*coeff to dst (no XOR)
+	if hasGFNI {
+		aligned := n &^ 63
+		if aligned > 0 {
+			mulGFNINoXor(dst[:aligned], src[:aligned], gfniMatrix[coeff])
+		}
+		for i := aligned; i < n; i++ {
+			dst[i] = Mul(src[i], coeff)
+		}
+		return
+	}
+
+	// Scalar
+	for i := 0; i < n; i++ {
+		dst[i] = Mul(src[i], coeff)
+	}
+}
+
+//go:noescape
+func mulGFNINoXor(dst, src []byte, matrix uint64)
