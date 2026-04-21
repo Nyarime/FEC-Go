@@ -169,6 +169,22 @@ GoFEC/
 - [x] v1.x — AVX512 GFNI运行时加速 (3倍GF提速)
 - [ ] v2.0 — GF(2^16) + Leopard-RS (65536分片)
 
+
+## Benchmark
+
+AMD EPYC 9654 (AVX512 GFNI) 实测:
+
+| 操作 | 数据大小 | 吞吐 |
+|------|---------|------|
+| GF(256) MulAdd (GFNI) | 4KB | **87 GB/s** |
+| GF(256) MulAdd (GFNI) | 1KB | **68 GB/s** |
+| RaptorQ Encode | 32KB | **2.06 GB/s** |
+| RaptorQ Encode | 2KB | **1.36 GB/s** |
+| LDPC Encode | 2KB | **286 MB/s** |
+| LDPC Decode | 2KB | **263 MB/s** |
+
+SIMD 自动调度: AVX512 GFNI > AVX2 > SSE4.1 > NEON > scalar
+
 ## 被引用
 
 - [NRUP](https://github.com/Nyarime/NRUP) — Nyarime Reliable UDP Protocol
