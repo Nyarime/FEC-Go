@@ -166,7 +166,7 @@ GoFEC/
 ## 路线图
 
 - [x] v1.0 — RaptorQ + LDPC + AVX2 + NEON
-- [ ] v1.x — AVX512 GFNI运行时加速 (3倍GF提速)
+- [x] v1.x — AVX512 GFNI运行时加速 (3倍GF提速)
 - [ ] v2.0 — GF(2^16) + Leopard-RS (65536分片)
 
 ## 被引用
