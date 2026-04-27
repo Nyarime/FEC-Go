@@ -2,6 +2,7 @@ package leopard
 
 import (
 	"crypto/rand"
+	"fmt"
 	"testing"
 )
 
@@ -194,6 +195,147 @@ func TestLeopardMedium(t *testing.T) {
 				t.Fatalf("shard %d mismatch at byte %d", i, j)
 			}
 		}
+	}
+}
+
+func TestLeopardLarge(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping large test in short mode")
+	}
+
+	dataShards := 10000
+	parityShards := 1000
+	total := dataShards + parityShards
+	shardSize := 4096
+
+	enc, err := New(dataShards, parityShards)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	shards := make([][]byte, total)
+	for i := 0; i < dataShards; i++ {
+		shards[i] = make([]byte, shardSize)
+		rand.Read(shards[i])
+	}
+	for i := dataShards; i < total; i++ {
+		shards[i] = make([]byte, shardSize)
+	}
+
+	if err := enc.Encode(shards); err != nil {
+		t.Fatal("Encode:", err)
+	}
+
+	// Save originals
+	orig := make([][]byte, dataShards)
+	for i := 0; i < dataShards; i++ {
+		orig[i] = make([]byte, shardSize)
+		copy(orig[i], shards[i])
+	}
+
+	// Erase 1000 random data shards (deterministic pattern)
+	present := make([]bool, total)
+	for i := range present {
+		present[i] = true
+	}
+	erased := 0
+	for i := 0; i < dataShards && erased < parityShards; i += (dataShards / parityShards) {
+		shards[i] = nil
+		present[i] = false
+		erased++
+	}
+
+	if err := enc.Decode(shards, present); err != nil {
+		t.Fatal("Decode:", err)
+	}
+
+	// Verify recovered shards
+	for i := 0; i < dataShards; i++ {
+		if !present[i] {
+			continue // was erased but present was modified by our loop
+		}
+	}
+	for i := 0; i < dataShards; i += (dataShards / parityShards) {
+		if i/((dataShards/parityShards)) >= parityShards {
+			break
+		}
+		if shards[i] == nil {
+			t.Fatalf("shard %d not recovered", i)
+		}
+		for j := range orig[i] {
+			if shards[i][j] != orig[i][j] {
+				t.Fatalf("shard %d mismatch at byte %d", i, j)
+			}
+		}
+	}
+}
+
+func BenchmarkLeopardEncode(b *testing.B) {
+	for _, tc := range []struct{ data, parity int }{
+		{100, 10},
+		{1000, 100},
+		{10000, 1000},
+	} {
+		b.Run(fmt.Sprintf("%d+%d", tc.data, tc.parity), func(b *testing.B) {
+			enc, err := New(tc.data, tc.parity)
+			if err != nil {
+				b.Fatal(err)
+			}
+			total := tc.data + tc.parity
+			shards := make([][]byte, total)
+			for i := range shards {
+				shards[i] = make([]byte, 1024)
+				rand.Read(shards[i])
+			}
+			b.SetBytes(int64(tc.data * 1024))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				enc.Encode(shards)
+			}
+		})
+	}
+}
+
+func BenchmarkLeopardDecode(b *testing.B) {
+	for _, tc := range []struct{ data, parity int }{
+		{100, 10},
+		{1000, 100},
+	} {
+		b.Run(fmt.Sprintf("%d+%d", tc.data, tc.parity), func(b *testing.B) {
+			enc, err := New(tc.data, tc.parity)
+			if err != nil {
+				b.Fatal(err)
+			}
+			total := tc.data + tc.parity
+			shards := make([][]byte, total)
+			for i := range shards {
+				shards[i] = make([]byte, 1024)
+				rand.Read(shards[i])
+			}
+			enc.Encode(shards)
+
+			// Pre-erase template
+			b.SetBytes(int64(tc.data * 1024))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				b.StopTimer()
+				test := make([][]byte, total)
+				present := make([]bool, total)
+				for j := range shards {
+					test[j] = make([]byte, 1024)
+					copy(test[j], shards[j])
+					present[j] = true
+				}
+				// Erase half of parity shards worth of data
+				eraseCount := tc.parity / 2
+				for e := 0; e < eraseCount; e++ {
+					test[e] = nil
+					present[e] = false
+				}
+				b.StartTimer()
+				enc.Decode(test, present)
+			}
+		})
 	}
 }
 
